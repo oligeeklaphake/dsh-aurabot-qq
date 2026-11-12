@@ -85,6 +85,24 @@ export default {
     })
     api.route('/image/open-folder', async () => openPaintFolder())
 
+    api.command?.({
+      name: '画图',
+      desc: '画一张图，例如 /画图 雨中的橘猫',
+      run: async (prompt, msg) => {
+        if (!String(prompt || '').trim()) return '用法：/画图 雨中的橘猫'
+        try {
+          const buf = await gen.generate(String(prompt))
+          const sent = await hub.sendSegments(msg.chatId, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], '[生图]')
+          if (!sent) return '画好了，但没有发到 QQ，请检查网关和试运行设置'
+          const saved = savePainting(buf, String(prompt))
+          if (saved) rememberPainting(msg.chatId, saved)
+          return ''
+        } catch (error) {
+          return `画图失败：${error.message || String(error)}`
+        }
+      },
+    })
+
     // 生图模块开着就把工具挂上；「没开启 / 没填地址 / Codex 没登录」在执行时再如实提示。
     // 不能按登录状态决定挂不挂：Codex 订阅常是「先开会话、后登录」，那样工具会缺失（unknown tool）。
     api.tool(({ chat, sessionId }) => ((api.config().imageGen.enabled && chat.kind !== 'system') ? defineTool({

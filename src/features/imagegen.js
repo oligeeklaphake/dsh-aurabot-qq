@@ -158,7 +158,7 @@ export function createImageGen({ getConfig, log, local, dsh, fetchImpl, codexAut
     const full = [c.stylePrompt, prompt].filter(Boolean).join('，')
     const t = Date.now()
     let buf
-    try { buf = c.provider === 'codex' ? await viaCodex(c, full, { shape, image }) : c.provider === 'custom' ? await viaCustom(c, full, image) : await viaOpenAI(c, full, image) }
+    try { buf = c.provider === 'codex' ? await viaCodex(c, full, { shape, image }) : c.provider === 'custom' ? await viaCustom(c, full, image) : c.provider === 'modelscope' ? await viaModelScope(c, full, image) : await viaOpenAI(c, full, image) }
     catch (error) {
       if (!c.fallbackEnabled || !error.imageRequestFailed) throw error
       let last = error
@@ -174,6 +174,36 @@ export function createImageGen({ getConfig, log, local, dsh, fetchImpl, codexAut
     if (!String(mimeOf(buf)).startsWith('image/')) throw new Error('生图接口返回的不是图片')
     log.info(`画好了一张图（${Math.round(buf.length / 1024)}KB，${Math.round((Date.now() - t) / 1000)}s）：${prompt.slice(0, 40)}`)
     return buf
+  }
+
+  /** 魔搭 API-Inference 用异步任务返回图片地址。 */
+  async function viaModelScope (c, prompt, image) {
+    const base = String(c.baseUrl || 'https://api-inference.modelscope.cn/v1').replace(/\/+$/, '')
+    if (!c.apiKey || !c.model) throw new Error('请填写魔搭 Token 和生图模型')
+    if (!String(prompt).trim() || Array.from(prompt).length >= 2000) throw new Error('画面描述需要少于 2000 字')
+    const headers = { authorization: `Bearer ${c.apiKey}`, 'content-type': 'application/json' }
+    const body = { model: c.model, prompt, size: c.size }
+    if (image) body.image_url = [`data:${mimeOf(image)};base64,${image.toString('base64')}`]
+    const read = async (response) => {
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(`魔搭 HTTP ${response.status}：${data.errors?.message || data.error?.message || data.message || '请求失败'}`)
+      return data
+    }
+    const submitted = await read(await fetch(`${base}/images/generations`, {
+      method: 'POST', headers: { ...headers, 'X-ModelScope-Async-Mode': 'true' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(30000),
+    }))
+    if (!submitted.task_id) throw new Error('魔搭没有返回任务编号')
+    const deadline = Date.now() + 240000
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5000))
+      const result = await read(await fetch(`${base}/tasks/${encodeURIComponent(submitted.task_id)}`, {
+        headers: { ...headers, 'X-ModelScope-Task-Type': 'image_generation' }, signal: AbortSignal.timeout(30000),
+      }))
+      if (result.task_status === 'FAILED') throw new Error(`魔搭生图失败：${result.message || result.error?.message || result.errors?.message || '请检查模型和额度'}`)
+      if (result.task_status === 'SUCCEED') return valueToBuffer(result.output_images?.[0])
+    }
+    throw new Error('魔搭生图超时，请稍后检查任务状态')
   }
 
   /** OpenAI 兼容接口。 */

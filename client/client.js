@@ -2425,6 +2425,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const [src, setSrc] = useState('')
       const engineOptions = [
         { value: 'auto', label: '自动', desc: 'edge-tts 优先，不行用 Windows 语音' },
+        { value: 'mimo', label: 'MiMo 音色克隆', desc: '使用参考音频合成语音' },
         { value: 'edge', label: '微软 edge-tts', desc: st.voice.edgeInstalled ? '在线，音色自然（已装好）' : '在线，音色自然（还没装）' },
         { value: 'cosyvoice', label: '本地 CosyVoice', desc: '自己部署的 CosyVoice 服务，可克隆音色' },
         { value: 'gptsovits', label: '本地 GPT-SoVITS', desc: 'GPT-SoVITS api_v2，用参考音频定音色' },
@@ -2444,6 +2445,17 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
             onChange: (v) => setDraft(setPath(draft, 'voice.engine', v)),
             toast,
           })),
+          draft.voice.engine === 'mimo' ? [
+            h(Row, { key: 'key', label: 'MiMo API Key', hint: '已保存的密钥留空保留' }, f.text('voice.mimo.apiKey', { type: 'password', placeholder: draft.voice.mimo.apiKeySet ? '已保存（不改就留空）' : '填写 MiMo API Key' })),
+            h(Row, { key: 'ref', label: '参考音频路径', hint: 'WAV 或 MP3，留空使用内置参考文件' }, f.text('voice.mimo.refAudio', { size: 'wide' })),
+            h(Row, { key: 'speed', label: 'MiMo 语速', hint: '通过风格指令调节，实际语速由模型决定' }, f.select('voice.mimo.speed', [
+              { value: 'slow', label: '较慢' },
+              { value: 'normal', label: '自然' },
+              { value: 'fast', label: '较快' },
+              { value: 'very-fast', label: '很快' },
+              { value: 'fastest', label: '极快' },
+            ], { width: 180 })),
+          ] : null,
           ['auto', 'edge'].includes(draft.voice.engine) ? [
             !st.voice.edgeInstalled ? h(Row, { key: 'i', label: 'edge-tts', hint: '装在插件自己的 Python 环境里，不影响系统' }, h(Btn, { small: true, onClick: async () => { toast('正在安装，可能要一两分钟…'); const r = await post('/voice/install'); toast(r.message); reload() } }, '安装 edge-tts')) : null,
             h(Row, { key: 'v', label: '音色' }, f.select('voice.voice', [
@@ -7846,9 +7858,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const setFallback = (i, k, value) => setFallbacks(fallbacks.map((e, j) => j === i ? { ...e, [k]: value } : e))
       const moveFallback = (i, step) => { const next = fallbacks.slice(); const j = i + step; if (j < 0 || j >= next.length) return; [next[i], next[j]] = [next[j], next[i]]; setFallbacks(next) }
       const custom = c.custom || {}
-      const [tab, setTab] = useState(() => c.provider === 'codex' ? 'codex' : c.provider === 'custom' ? 'custom' : c.baseUrl === SPONSOR_BASE ? 'sponsor' : 'openai')
+      const [tab, setTab] = useState(() => c.provider === 'codex' ? 'codex' : c.provider === 'custom' ? 'custom' : c.provider === 'modelscope' ? 'modelscope' : c.baseUrl === SPONSOR_BASE ? 'sponsor' : 'openai')
       const isCustom = tab === 'custom'
       const isCodex = tab === 'codex'
+      const isModelScope = tab === 'modelscope'
       const isPost = custom.method === 'POST'
       const params = Array.isArray(custom.params) ? custom.params : []
       const setParams = (next) => setDraft(setPath(draft, 'imageGen.custom.params', next))
@@ -7876,7 +7889,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
             h(Seg, {
               value: tab,
               onChange: changeTab,
-              options: [{ value: 'openai', label: 'OpenAI 格式' }, { value: 'custom', label: '自定义接口' }, { value: 'codex', label: 'Codex 订阅（实验性）' }, { value: 'sponsor', label: '官方推荐地址' }],
+              options: [{ value: 'openai', label: 'OpenAI 格式' }, { value: 'modelscope', label: '魔搭 ModelScope' }, { value: 'custom', label: '自定义接口' }, { value: 'codex', label: 'Codex 订阅（实验性）' }, { value: 'sponsor', label: '官方推荐地址' }],
             })),
           tab === 'sponsor' ? h('div', null,
             sponsorSelected && !sponsorHintClosed ? h('div', { className: 'ab-note', style: { marginBottom: 10 } },
@@ -7920,9 +7933,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
             h(Row, { label: '取值路径', hint: '接口直接回图片就留空；回 JSON 时填地址字段' },
               f.text('imageGen.custom.responsePath', { size: 'wide', placeholder: '如 data.0.url（留空自动找）' })),
           ) : h('div', null,
-            h(Row, { label: '服务地址', hint: '一般以 /v1 结尾' }, f.text('imageGen.baseUrl', { size: 'wide', placeholder: 'https://api.siliconflow.cn/v1' })),
+            h(Row, { label: '服务地址', hint: '一般以 /v1 结尾' }, f.text('imageGen.baseUrl', { size: 'wide', placeholder: isModelScope ? 'https://api-inference.modelscope.cn/v1' : 'https://api.siliconflow.cn/v1' })),
             h(Row, { label: 'API Key', hint: '只存在本机，不会显示出来' }, f.text('imageGen.apiKey', { type: 'password', placeholder: c.apiKeySet ? '已保存（不改就留空）' : '没有就留空' })),
-            h(Row, { label: '模型' }, f.text('imageGen.model', { size: 'wide', placeholder: '例如 Kwai-Kolors/Kolors' })),
+            h(Row, { label: '模型' }, f.text('imageGen.model', { size: 'wide', placeholder: isModelScope ? 'Qwen/Qwen-Image-2.1-Turbo' : '例如 Kwai-Kolors/Kolors' })),
           ),
           h('div', { className: 'ab-muted ab-small' }, '测试会实际生成图片，可能消耗额度；使用当前页面配置，不自动切换或发送到 QQ。'),
           testButton(''),

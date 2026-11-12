@@ -8,6 +8,7 @@ import { VOLCANO_VOICES } from '../../voice/volcano-voices.js'
 import { breezeBalance, breezeClaim, breezeSession, autoClaimOnce, breezeVoices } from '../../voice/breeze.js'
 import { createSongVoice } from '../../voice/rvc.js'
 import { toMono16k } from '../../voice/wav.js'
+import { mimoSpeech } from '../../voice/mimo.js'
 import { fileOf } from '../../local/local.js'
 import { asrConfigured, transcribeAudio } from '../../voice/asr.js'
 import { mergeFromPanel, normalize } from '../../core/config.js'
@@ -23,6 +24,7 @@ export default {
     const { hub, onebot, local, http } = api.core
 
     async function speak(text, voice = api.config().voice, { useLocal = true } = {}) {
+      if (voice.engine === 'mimo') return mimoSpeech(text, voice.mimo)
       // 本地接口接管语音合成；出错退回内置。试听用 useLocal=false，避免「本地接口」把任何引擎都顶掉
       if (useLocal && local.active('tts')) {
         try {
@@ -32,6 +34,18 @@ export default {
       }
       return textToSpeech(text, voice, api.log)
     }
+
+    api.command?.({
+      name: '语音', aliases: ['说话', 'say'], desc: '发一条语音，例如 /语音 晚安',
+      run: async (text, msg) => {
+        if (!String(text || '').trim()) return '用法：/语音 晚安'
+        try {
+          const result = await speak(String(text).slice(0, 300))
+          await api.sendVoiceFile(msg.chatId, result.file, '语音')
+          return ''
+        } catch (error) { return `语音合成失败：${error.message || String(error)}` }
+      },
+    })
 
     /** 试听用：把面板上「还没保存」的语音草稿合并进当前配置；空着的 Key 沿用已保存的。 */
     function voiceFromBody(body) {

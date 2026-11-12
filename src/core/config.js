@@ -103,8 +103,9 @@ export const DEFAULTS = {
   titleFilter: { enabled: true, groups: [], title: '大肥鱼' },
   voice: {
     enabled: true,
-    // auto = 先 edge-tts，不行用 Windows 语音；edge / windows / cosyvoice / gptsovits / volcano / breeze / minimax / http = 指定引擎（失败都会退回 Windows 语音）
+    // auto = 先 edge-tts，不行用 Windows 语音；mimo / edge / windows / cosyvoice / gptsovits / volcano / breeze / minimax / http = 指定引擎
     engine: 'auto',
+    mimo: { apiKey: '', refAudio: '', speed: 'normal' },
     cosyvoice: { url: 'http://127.0.0.1:50000', mode: 'sft', spkId: '中文女', instruct: '', sampleRate: 22050 },
     gptsovits: { url: 'http://127.0.0.1:9880', refAudio: '', promptText: '', promptLang: 'zh', textLang: 'zh' },
     // 通用 HTTP 引擎：GET 时地址里带 {text}；POST 时填接口地址，请求头一行一个，请求体里 {text} 自动替换（已做 JSON 转义）
@@ -874,7 +875,8 @@ export function normalize(raw) {
   g.burstMax = num(g.burstMax, 8, 1, BIG)
   g.engagedMax = num(g.engagedMax, 6, 0, BIG)
   g.burstWindowSec = num(g.burstWindowSec, 120, 1, BIG)
-  if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http', 'volcano', 'breeze', 'minimax'].includes(c.voice.engine)) c.voice.engine = 'auto'
+  if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http', 'volcano', 'breeze', 'minimax', 'mimo'].includes(c.voice.engine)) c.voice.engine = 'auto'
+  if (!['slow', 'normal', 'fast', 'very-fast', 'fastest'].includes(c.voice.mimo.speed)) c.voice.mimo.speed = 'normal'
   c.voice.songVoice = String(c.voice.songVoice || '').slice(0, 120)
   c.voice.songPitch = Math.max(-24, Math.min(24, Math.round(Number(c.voice.songPitch) || 0)))
   c.voice.cosyvoice.sampleRate = num(c.voice.cosyvoice.sampleRate, 22050, 8000, 48000)
@@ -898,7 +900,7 @@ export function normalize(raw) {
   c.imageGen.shape = ['her', 'square', 'portrait', 'landscape', 'wide'].includes(c.imageGen.shape) ? c.imageGen.shape : 'her'
 
   // provider：custom = 自己填接口（GET/POST + 自定义参数），其它按 OpenAI 兼容
-  c.imageGen.provider = ['custom', 'codex'].includes(c.imageGen.provider) ? c.imageGen.provider : 'openai'
+  c.imageGen.provider = ['custom', 'codex', 'modelscope'].includes(c.imageGen.provider) ? c.imageGen.provider : 'openai'
   // 「服务地址」下拉的用户自添地址：{ name, url }；只要 http(s) 链接，按地址去重，最多 20 条
   // （官方推荐的赞助商地址固定第一项，不存这里；旧版只存字符串的自动用域名当名字）
   c.imageGen.baseUrlOptions = (Array.isArray(c.imageGen.baseUrlOptions) ? c.imageGen.baseUrlOptions : [])
@@ -969,7 +971,7 @@ export function normalize(raw) {
 }
 
 // 面板里不回传原文的字段：路径（几层都行）
-const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['voice', 'asrApi', 'apiKey'], ['memory', 'vector', 'apiKey'], ['memory', 'rerank', 'apiKey'], ['song', 'neteaseCookie'], ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct'], ['heybox', 'cookie'], ['bridge', 'token'], ['voice', 'volcano', 'apiKey'], ['voice', 'breeze', 'key'], ['voice', 'breeze', 'password'], ['voice', 'minimax', 'apiKey'], ['backup', 'remote', 'token'], ['backup', 'remote', 'webdav', 'password']]
+const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['voice', 'mimo', 'apiKey'], ['ext', 'aura-mimo', 'apiKey'], ['voice', 'asrApi', 'apiKey'], ['memory', 'vector', 'apiKey'], ['memory', 'rerank', 'apiKey'], ['song', 'neteaseCookie'], ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct'], ['heybox', 'cookie'], ['bridge', 'token'], ['voice', 'volcano', 'apiKey'], ['voice', 'breeze', 'key'], ['voice', 'breeze', 'password'], ['voice', 'minimax', 'apiKey'], ['backup', 'remote', 'token'], ['backup', 'remote', 'webdav', 'password']]
 // 扩展模块设置里的密码类字段（模块加载时登记）：['ext', 模块id, 字段]
 const extraSecrets = new Map()
 export function registerSecretField(path) { extraSecrets.set(path.join('\u0000'), path) }
@@ -1052,6 +1054,28 @@ export const OPT_IN_ON_UPDATE = ['qzoneSocial', 'bili', 'douyin']
 
 export function loadConfig() {
   const raw = readJson(FILE(), {})
+  if (raw.voice?.mimoMigrationPending && raw.ext?.['aura-mimo']?.apiKey) {
+    raw.voice.mimo = { apiKey: raw.ext['aura-mimo'].apiKey, refAudio: dataDir('voice', 'mimo-reference.wav') }
+    raw.voice.engine = 'mimo'
+    delete raw.voice.mimoMigrationPending
+    raw.modules ||= {}
+    raw.modules['aura-mimo'] = { ...raw.modules['aura-mimo'], enabled: false }
+    writeJson(FILE(), raw)
+  }
+  // 迁移旧版 aura-mimo 内的魔搭配置，避免两个生图入口同时运行。
+  const oldModelScopeKey = raw?.ext?.['aura-mimo']?.modelscopeKey
+  if (oldModelScopeKey && !raw.imageGen?.enabled && !raw.imageGen?.apiKey) {
+    raw.imageGen = {
+      ...raw.imageGen,
+      enabled: true,
+      provider: 'modelscope',
+      baseUrl: 'https://api-inference.modelscope.cn/v1',
+      model: 'Qwen/Qwen-Image-2.1-Turbo',
+      apiKey: oldModelScopeKey,
+    }
+    delete raw.ext['aura-mimo'].modelscopeKey
+    writeJson(FILE(), raw)
+  }
   // 老配置（向导上线前就填好了两个号）直接算向导已完成
   if (raw && raw.setupDone === undefined && raw.botQQ && raw.ownerQQ) raw.setupDone = true
   // 更新插件后新增的、会公开发东西的功能：老用户先关着，等他们自己在面板里打开（新安装照常默认开）
