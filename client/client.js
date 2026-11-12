@@ -7838,6 +7838,37 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     // 官方推荐（赞助商）地址：固定第一项，面板里不可删；官网从这里跳
     const SPONSOR_BASE = 'https://ntmd.cn/v1'
     const SPONSOR_SITE = 'https://ntmd.cn'
+    function ModelScopeModels({ draft, setDraft }) {
+      const [input, setInput] = useState('')
+      const { models = [], defaultModel = '' } = draft.imageGen.modelScope || {}
+      const id = input.trim()
+      const canAdd = /^[\w.-]+\/[\w.-]+$/.test(id) && !models.some((model) => model.toLowerCase() === id.toLowerCase())
+      const update = (list, selected) => setDraft(setPath(draft, 'imageGen.modelScope', { models: list, defaultModel: selected }))
+      const add = () => {
+        if (!canAdd) return
+        update([...models, id], defaultModel || id)
+        setInput('')
+      }
+      const remove = (id) => {
+        const list = models.filter((model) => model !== id)
+        update(list, id === defaultModel ? list[0] || '' : defaultModel)
+      }
+      return h(Fragment, null,
+        h(Row, { label: '默认生图模型', hint: 'QQ 里没有指定模型时使用。' },
+          models.length ? h(Select, { value: defaultModel, width: 320, ariaLabel: '默认生图模型',
+            options: models.map((value) => ({ value, label: value })), onChange: (value) => update(models, value) })
+            : h('span', { className: 'ab-muted' }, '先添加一个模型')),
+        h(Row, { label: '可用模型', hint: '填写魔搭模型 ID，例如 Qwen/Qwen-Image-2.1。QQ 里发 /画图 模型 可以查看名单。' },
+          h('div', { className: 'ab-grid', style: { width: '100%' } },
+            ...models.map((model) => h('div', { key: model, className: 'ab-flex', style: { flexWrap: 'wrap' } },
+              h('span', { style: { overflowWrap: 'anywhere' } }, model), h('div', { className: 'ab-spacer' }),
+              h(Btn, { small: true, kind: 'ghost', onClick: () => remove(model), title: `移除 ${model}` }, '移除'))),
+            h('div', { className: 'ab-flex', style: { flexWrap: 'wrap' } },
+              h('input', { className: 'ab-input', 'aria-label': '魔搭模型 ID', value: input, placeholder: '组织名/模型名',
+                onChange: (e) => setInput(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); add() } } }),
+              h(Btn, { small: true, disabled: !canAdd, onClick: add }, '添加模型')))),
+      )
+    }
 
     function ImageGen({ draft, setDraft, toast }) {
       const f = useField(draft, setDraft)
@@ -7935,7 +7966,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           ) : h('div', null,
             h(Row, { label: '服务地址', hint: '一般以 /v1 结尾' }, f.text('imageGen.baseUrl', { size: 'wide', placeholder: isModelScope ? 'https://api-inference.modelscope.cn/v1' : 'https://api.siliconflow.cn/v1' })),
             h(Row, { label: 'API Key', hint: '只存在本机，不会显示出来' }, f.text('imageGen.apiKey', { type: 'password', placeholder: c.apiKeySet ? '已保存（不改就留空）' : '没有就留空' })),
-            h(Row, { label: '模型' }, f.text('imageGen.model', { size: 'wide', placeholder: isModelScope ? 'Qwen/Qwen-Image-2.1-Turbo' : '例如 Kwai-Kolors/Kolors' })),
+            isModelScope ? h(ModelScopeModels, { draft, setDraft }) : h(Row, { label: '模型' }, f.text('imageGen.model', { size: 'wide', placeholder: '例如 Kwai-Kolors/Kolors' })),
           ),
           h('div', { className: 'ab-muted ab-small' }, '测试会实际生成图片，可能消耗额度；使用当前页面配置，不自动切换或发送到 QQ。'),
           testButton(''),

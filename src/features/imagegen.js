@@ -3,6 +3,7 @@
 //   ② custom —— 自己填接口：GET / POST、URL 模板（{prompt} 占位）、自定义参数名、从返回 JSON 里按路径取图
 // 地址和密钥由主人在面板里填；生成结果统一成 Buffer 交给 QQ 发出。
 
+import { modelScopeModels } from './modelscope-models.js'
 import { lstatSync, readFileSync } from 'node:fs'
 import { fetchImage } from '../core/net.js'
 import { paintingPath } from './paintings.js'
@@ -139,11 +140,23 @@ export function createImageGen({ getConfig, log, local, dsh, fetchImpl, codexAut
   const fetch = fetchImpl || ((...args) => globalThis.fetch(...args))
   const auth = codexAuth || createCodexAuth({ log, fetchImpl: fetch })
   const viaCodex = createCodexImage({ auth, fetchImpl: fetch, log })
-  async function generate(prompt, { shape, image, size, onRetry } = {}) {
+  function modelChoices() {
+    const c = getConfig().imageGen
+    return c.provider === 'modelscope' && !local?.active('image') ? modelScopeModels(c) : null
+  }
+
+  async function generate(prompt, { shape, image, size, model, onRetry } = {}) {
     const config = getConfig().imageGen
     const requestedSize = size == null || size === '' ? '' : normalizeRequestedSize(size)
     if (size != null && size !== '' && !requestedSize) throw new Error('图片尺寸格式不对，应为 1024x1024 或 2048x2048 这类格式')
     const c = { ...config, size: requestedSize || imageSizeFor(shape, config) }
+    const selection = modelChoices()
+    const requested = String(model || '').trim()
+    if (requested && !selection) throw new Error('当前生图服务不支持单次指定魔搭模型')
+    if (selection) {
+      c.model = requested ? selection.models.find((id) => id.toLowerCase() === requested.toLowerCase()) : selection.defaultModel
+      if (!c.model) throw new Error(requested ? `这个模型未添加到魔搭列表。可选：${selection.models.join('、') || '无'}` : '请先在生图设置中添加魔搭模型')
+    }
     if (image != null && (!Buffer.isBuffer(image) || !String(mimeOf(image)).startsWith('image/'))) throw new Error('参考图不是可用的图片')
     if (image && c.img2img === false) throw new Error('参考图功能已关闭')
     // 本地接口接管：用用户自己电脑上的画图服务
@@ -271,6 +284,7 @@ export function createImageGen({ getConfig, log, local, dsh, fetchImpl, codexAut
     const c = getConfig().imageGen
     if (!c.enabled) return false
     if (c.provider === 'codex') return auth.status().loggedIn
+    if (c.provider === 'modelscope') return Boolean(c.apiKey && modelScopeModels(c).defaultModel)
     return c.provider === 'custom' ? Boolean(c.custom && c.custom.url) : Boolean(c.baseUrl && c.model)
   }
 
@@ -286,13 +300,14 @@ export function createImageGen({ getConfig, log, local, dsh, fetchImpl, codexAut
       return auth.status().loggedIn ? '' : 'ChatGPT 订阅还没登录：面板「生图」页 → Codex 订阅 → 登录'
     }
     if (c.provider === 'custom') return c.custom && c.custom.url ? '' : '自定义生图接口地址还没填（面板「生图」页）'
+    if (c.provider === 'modelscope') return c.apiKey && modelScopeModels(c).defaultModel ? '' : '请在面板「生图」页填写魔搭 Token 并添加模型'
     return c.baseUrl && c.model ? '' : '还没填生图服务地址或模型（面板「生图」页）'
   }
 
   // 保留本地调用方的附件辅助接口，与模块工具共用同一份图片登记实现。
   const canSee = async () => Boolean(dsh && (await canSeeImages(dsh, getConfig())) === true)
   const toolImage = async (buf) => dsh ? imageToolBlock(dsh, buf, { ffmpegPath: getConfig().bili?.ffmpegPath, log }) : null
-  return { generate, canSee, toolImage, enabled, notReadyReason, codexAuth: auth, dispose: () => auth.dispose?.() }
+  return { generate, canSee, toolImage, enabled, modelChoices, notReadyReason, codexAuth: auth, dispose: () => auth.dispose?.() }
 }
 
 /**

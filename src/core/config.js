@@ -6,6 +6,7 @@ import { dataDir, readJson, writeJson } from './store.js'
 import { DEFAULT_GROUP_POLICY } from '../chat/group-policy.js'
 import { LEVELS, PROFILE_PERM_KEYS, PROFILE_PERM_LEVELS, profilePermDefault } from '../chat/access.js'
 import { normalizeChatModels } from '../chat/chat-model.js'
+import { normalizeModelScopeModels } from '../features/modelscope-models.js'
 import { DELEGATED_COMMANDS, isDelegatedCommandKey } from '../chat/delegated-commands.js'
 import { DIARY_AUDIENCES } from '../features/qzone-audience.js'
 import { DEFAULT_TIER_DAYS } from '../features/memory-rules.js'
@@ -76,6 +77,7 @@ export const DEFAULTS = {
   merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 }, // 连发合并：对方停顿 waitSec 秒再一起回，最多等 maxSec 秒；群里等得久一点，把一段话攒齐
   forward: { expandEarly: false, expandHistory: false }, // 合并转发：expandEarly=消息一进来就展开成文字存进上下文（哪怕这条不交给她，代价是每条转发多调一次 get_forward_msg）；expandHistory=交给她之前把缓冲里还没展开过的转发补展开（每条只拉一次）
   imageGen: {
+    modelScope: normalizeModelScopeModels(),
     enabled: false,
     provider: 'openai', // openai / custom；codex = 实验性订阅接法（需单独登录）
     baseUrl: '',
@@ -909,6 +911,8 @@ export function normalize(raw) {
     .map((o) => { if (o.name) return o; try { return { ...o, name: new URL(o.url).hostname } } catch { return { ...o, name: o.url } } })
     .filter((o, i, a) => a.findIndex((x) => x.url === o.url) === i)
     .slice(0, 20)
+  const legacyModel = c.imageGen.provider === 'modelscope' ? c.imageGen.model : ''
+  c.imageGen.modelScope = normalizeModelScopeModels(raw?.imageGen?.modelScope, legacyModel)
   if (!isObj(c.imageGen.codex)) c.imageGen.codex = { ...DEFAULTS.imageGen.codex }
   const igx = c.imageGen.codex
   igx.model = ['gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'].includes(igx.model) ? igx.model : 'gpt-image-2'

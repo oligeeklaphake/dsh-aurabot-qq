@@ -19,7 +19,7 @@ export default {
   version: '1.0.0',
   description: '画一张图发到聊天里（qq_draw_image）',
   tab: 'imagegen',
-  files: ['features/imagegen.js', 'features/image-shape.js', 'features/paintings.js', 'features/codex-auth.js', 'features/codex-image.js'],
+  files: ['features/imagegen.js', 'features/image-shape.js', 'features/modelscope-models.js', 'features/paintings.js', 'features/codex-auth.js', 'features/codex-image.js'],
   setup(api) {
     const { hub, local } = api.core
     const memory = api.lazy('memory')
@@ -27,8 +27,16 @@ export default {
     const auth = gen.codexAuth
     api.onDispose?.(() => gen.dispose())
     api.context?.(({ chat }) => {
-      if (!gen.enabled() || !privateCapabilityAllowed(api.config(), chat, 'image')) return ''
-      return '当前私聊对象已经获得主人的画图授权。对方请求画图时可以直接使用 qq_draw_image；之前说过的权限限制已更新，以当前授权为准。'
+      if (!gen.enabled()) return ''
+      const hints = []
+      if (privateCapabilityAllowed(api.config(), chat, 'image')) {
+        hints.push('当前私聊对象已经获得主人的画图授权。对方请求画图时可以直接使用 qq_draw_image；之前说过的权限限制已更新，以当前授权为准。')
+      }
+      const selection = gen.modelChoices()
+      if (selection?.defaultModel) {
+        hints.push(`魔搭默认生图模型为 ${selection.defaultModel}。可选模型：${selection.models.join('、')}。用户明确指定时，把完整模型 ID 传给 qq_draw_image 的 model 参数；未指定时省略。`)
+      }
+      return hints.join('\n')
     })
     const accountAction = (fn) => async (req) => {
       if (req?.method !== 'POST' || !/^application\/json(?:\s*;|$)/i.test(String(req.headers?.['content-type'] || ''))) return { ok: false, message: '账号操作需要 POST JSON 请求' }
@@ -87,11 +95,20 @@ export default {
 
     api.command?.({
       name: '画图',
-      desc: '画一张图，例如 /画图 雨中的橘猫',
-      run: async (prompt, msg) => {
-        if (!String(prompt || '').trim()) return '用法：/画图 雨中的橘猫'
+      desc: '画一张图，例如 /画图 雨中的橘猫；/画图 模型 查看魔搭模型',
+      run: async (arg, msg) => {
+        const input = String(arg || '').trim()
+        if (input === '模型') {
+          const selection = gen.modelChoices()
+          if (!selection) return '当前生图服务没有魔搭模型列表'
+          const { models, defaultModel } = selection
+          return models.length ? `魔搭生图模型\n${models.map((id) => id + (id === defaultModel ? '（默认）' : '')).join('\n')}\n临时指定：/画图 --model 模型ID 画面描述` : '还没添加魔搭模型'
+        }
+        const explicit = input.match(/^--model\s+(\S+)\s+([\s\S]+)$/)
+        const prompt = explicit ? explicit[2].trim() : input
+        if (!prompt || (/^--model(?:\s|$)/.test(input) && !explicit)) return '用法：/画图 雨中的橘猫 或 /画图 --model 模型ID 画面描述'
         try {
-          const buf = await gen.generate(String(prompt))
+          const buf = await gen.generate(prompt, { model: explicit?.[1] })
           const sent = await hub.sendSegments(msg.chatId, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], '[生图]')
           if (!sent) return '画好了，但没有发到 QQ，请检查网关和试运行设置'
           const saved = savePainting(buf, String(prompt))
@@ -111,6 +128,7 @@ export default {
       properties: {
         prompt: str('画面描述'),
         notice: str('结合对方的要求和当前对话写一句自然简短的回应，开始画图前会直接发送'),
+        model: str('可选，仅魔搭生图使用。用户明确指定时传模型列表中的完整 ID，否则省略以使用默认模型'),
         image: str('可选参考图：last = 当前聊天最近收到的一张图；quote = 当前聊天引用消息里的图；或图库中的画作文件名。禁止本地路径、网址'),
         shape: { type: 'string', enum: ['square', 'portrait', 'landscape', 'wide'], description: 'square 方图 1:1；portrait 竖图 2:3；landscape 横图 3:2；wide 宽幅 16:9。可不填' },
         size: { type: 'string', enum: SIZE_OPTIONS, description: '可选尺寸，例如 2048x2048（2K）、4096x4096（4K）；优先于 shape / 面板默认，不填沿用原逻辑' },
@@ -118,7 +136,7 @@ export default {
       required: ['prompt', 'notice'],
       // 能看图时把原图放进工具结果（image 块），她当轮就能看见自己画了什么
       render: drawResultBlocks,
-      execute: async ({ prompt, shape, image, size, notice }) => {
+      execute: async ({ prompt, shape, image, size, model, notice }) => {
         const cfg = api.config()
         const ownerRequest = hub.turnSendersAllOwner(sessionId) || (chat.kind === 'group' && hub.turnDirectFromOwner?.(sessionId))
         if (cfg.imageGen.ownerOnly && !ownerRequest && !privateCapabilityAllowed(cfg, chat, 'image')) return { ok: false, message: '画图只给主人画哦；群里请主人单独 @ 我或引用回复我提出请求，多人同时提出请求时请分开发送。' }
@@ -140,7 +158,7 @@ export default {
           try { const sent = await hub.sendText(chat.chatId, `${message || fallback}（${issue}）`); if (!sent && message) await hub.sendText(chat.chatId, `${fallback}（${issue}）`) } catch (e) { api.log.debug('生图进度回复没发出去：', e.message) }
         }
         let buf
-        try { buf = await gen.generate(String(prompt || ''), { shape, image: reference, size, onRetry: ({ error }) => progress(error, true) }) }
+        try { buf = await gen.generate(String(prompt || ''), { shape, image: reference, size, model, onRetry: ({ error }) => progress(error, true) }) }
         catch (error) { await progress(error, false); return { ok: false, message: `生图失败：${reason(error)}。已尝试告知对方，请结合情况回应，不要说画好了。` } }
         const sent = await hub.sendSegments(chat.chatId, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[生图] ${String(prompt).slice(0, 30)}`)
         // 调试 / 试运行下本来就不真发（sendSegments 只记日志、返回 null）：
